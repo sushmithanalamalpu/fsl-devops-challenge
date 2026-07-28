@@ -49,14 +49,6 @@ jobs:
         working-directory: codebase/rdicidr-0.1.0
 
     env:
-      # The package.json engine constraints are outdated.
-      NPM_CONFIG_ENGINE_STRICT: "false"
-
-      # Required for the older React dependency tree.
-      NPM_CONFIG_LEGACY_PEER_DEPS: "true"
-
-      # Required if react-scripts 4/Webpack 4 encounters
-      # OpenSSL errors on modern Node versions.
       NODE_OPTIONS: "--openssl-legacy-provider"
 
     steps:
@@ -66,7 +58,7 @@ jobs:
       - name: Set up Node.js
         uses: actions/setup-node@v7
         with:
-          node-version: "20"
+          node-version: "22"
           package-manager-cache: false
 
       - name: Display runtime versions and available scripts
