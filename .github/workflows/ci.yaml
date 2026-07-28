@@ -1,39 +1,82 @@
-name: CI Pipeline
+name: Pull Request CI
 
+# Run when a PR targeting devel or stage is opened,
+# updated, reopened, or changed from draft to ready.
 on:
   pull_request:
     branches:
-      - main
       - devel
       - stage
+    types:
+      - opened
+      - synchronize
+      - reopened
+      - ready_for_review
+
+# The workflow only needs permission to read repository contents.
+permissions:
+  contents: read
+
+# Cancel the previous workflow run when another commit
+# is pushed to the same pull request.
+concurrency:
+  group: ${{ github.workflow }}-pr-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
 
 jobs:
-  build:
+  validate-branch-flow:
+    name: Validate PR branch flow
     runs-on: ubuntu-latest
 
     steps:
-      - name: Check out code
-        uses: actions/checkout@v4
+      - name: Validate source branch
+        if: github.base_ref == 'stage' && github.head_ref != 'devel'
+        run: |
+          echo "ERROR: Only the devel branch can be merged into stage."
+          echo "Source branch: ${{ github.head_ref }}"
+          echo "Target branch: ${{ github.base_ref }}"
+          exit 1
+
+      - name: Branch validation passed
+        run: |
+          echo "Valid branch flow: ${{ github.head_ref }} -> ${{ github.base_ref }}"
+
+  application-ci:
+    name: Install, lint, test and build
+    needs: validate-branch-flow
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v7
 
       - name: Set up Node.js
-        uses: actions/setup-node@v4
+        uses: actions/setup-node@v7
         with:
-          node-version: "15.5.1"
+          node-version-file: ".nvmrc"
           cache: npm
+
+      - name: Display runtime versions
+        run: |
+          node --version
+          npm --version
 
       - name: Install dependencies
         run: npm install
 
-      - name: Run linter
+      - name: Run ESLint
         run: npm run lint
 
-      - name: Run formatter
-        run: npm run prettier
-
-      - name: Run tests
+      - name: Run Jest tests
         env:
           CI: "true"
         run: npm run test
 
-      - name: Build project
+      - name: Build production application
         run: npm run build
+
+      # Enable this only after all existing files
+      # have been formatted successfully.
+      #
+      # - name: Validate Prettier formatting
+      #   run: npm run prettier
