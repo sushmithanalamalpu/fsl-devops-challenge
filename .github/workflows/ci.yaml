@@ -1,5 +1,8 @@
 name: Pull Request CI
 on:
+  push:
+    branches:
+      - feature/devel
   pull_request:
     branches:
       - devel
@@ -58,8 +61,7 @@ jobs:
         uses: actions/setup-node@v7
         with:
           node-version-file: codebase/rdicidr-0.1.0/.nvmrc
-          cache: npm
-          cache-dependency-path: codebase/rdicidr-0.1.0/package-lock.json
+          package-manager-cache: false
 
       - name: Display runtime versions
         run: |
