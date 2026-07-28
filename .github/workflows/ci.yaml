@@ -67,6 +67,9 @@ jobs:
           npm run
 
       - name: Install dependencies
+        env:
+          # Allows this older React dependency tree to install with npm 7.
+          NPM_CONFIG_LEGACY_PEER_DEPS: "true"
         run: npm install
 
       - name: Run ESLint
