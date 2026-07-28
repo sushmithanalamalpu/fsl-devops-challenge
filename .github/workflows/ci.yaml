@@ -11,12 +11,9 @@ on:
       - reopened
       - ready_for_review
 
-# The workflow only needs permission to read repository contents.
 permissions:
   contents: read
 
-# Cancel the previous workflow run when another commit
-# is pushed to the same pull request.
 concurrency:
   group: ${{ github.workflow }}-pr-${{ github.event.pull_request.number }}
   cancel-in-progress: true
@@ -28,15 +25,15 @@ jobs:
 
     steps:
       - name: Validate source branch
-        if: github.base_ref == 'stage' && github.head_ref != 'devel'
+        shell: bash
         run: |
-          echo "ERROR: Only the devel branch can be merged into stage."
-          echo "Source branch: ${{ github.head_ref }}"
-          echo "Target branch: ${{ github.base_ref }}"
-          exit 1
+          if [[ "${{ github.base_ref }}" == "stage" && "${{ github.head_ref }}" != "devel" ]]; then
+            echo "ERROR: Only the devel branch can be merged into stage."
+            echo "Source branch: ${{ github.head_ref }}"
+            echo "Target branch: ${{ github.base_ref }}"
+            exit 1
+          fi
 
-      - name: Branch validation passed
-        run: |
           echo "Valid branch flow: ${{ github.head_ref }} -> ${{ github.base_ref }}"
 
   application-ci:
@@ -49,6 +46,7 @@ jobs:
         working-directory: codebase/rdicidr-0.1.0
 
     env:
+      NPM_CONFIG_LEGACY_PEER_DEPS: "true"
       NODE_OPTIONS: "--openssl-legacy-provider"
 
     steps:
@@ -61,7 +59,7 @@ jobs:
           node-version: "22"
           package-manager-cache: false
 
-      - name: Display runtime versions and available scripts
+      - name: Display runtime versions
         run: |
           node --version
           npm --version
