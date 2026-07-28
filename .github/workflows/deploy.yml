@@ -57,7 +57,7 @@ jobs:
       ENVIRONMENT: ${{ github.ref_name }}
 
       # Values loaded from the selected GitHub environment.
-      AWS_REGION: ${{ vars.AWS_REGION }}
+      AWS_REGION: ${{ vars.aws_region }}
       AWS_ROLE_ARN: ${{ vars.AWS_ROLE_ARN }}
       TF_STATE_BUCKET: ${{ vars.TF_STATE_BUCKET }}
 
