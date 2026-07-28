@@ -1,0 +1,415 @@
+name: Deploy to AWS
+
+# Deploy only after code reaches one of the protected
+# environment branches.
+on:
+  push:
+    branches:
+      - devel
+      - stage
+
+  # Also allows a controlled manual rerun from GitHub Actions.
+  # The job condition below prevents deployment from other branches.
+  workflow_dispatch:
+
+# contents: read allows repository checkout.
+# id-token: write allows GitHub to request an OIDC token
+# and exchange it for temporary AWS credentials.
+permissions:
+  contents: read
+  id-token: write
+
+# Prevent two deployments from changing the same environment
+# and Terraform state at the same time.
+concurrency:
+  group: deploy-${{ github.ref_name }}
+  cancel-in-progress: false
+
+jobs:
+  deploy:
+    name: Deploy ${{ github.ref_name }}
+
+    # Do not deploy main, feature branches, or other branches.
+    if: github.ref_name == 'devel' || github.ref_name == 'stage'
+
+    runs-on: ubuntu-latest
+
+    timeout-minutes: 45
+
+    # Select the GitHub environment matching the branch.
+    #
+    # devel branch -> devel environment
+    # stage branch -> stage environment
+    #
+    # This also causes GitHub's OIDC subject to contain:
+    # environment:devel or environment:stage.
+    environment:
+      name: ${{ github.ref_name }}
+
+    env:
+      # React application directory.
+      APP_DIR: codebase/rdicidr-0.1.0
+
+      # Terraform root module directory.
+      TF_DIR: codebase/rdicidr-0.1.0/terraform
+
+      # The protected branch name is also the Terraform environment.
+      ENVIRONMENT: ${{ github.ref_name }}
+
+      # Values loaded from the selected GitHub environment.
+      AWS_REGION: ${{ vars.AWS_REGION }}
+      AWS_ROLE_ARN: ${{ vars.AWS_ROLE_ARN }}
+      TF_STATE_BUCKET: ${{ vars.TF_STATE_BUCKET }}
+
+      # Prevent Terraform from prompting for user input.
+      TF_IN_AUTOMATION: "true"
+      TF_INPUT: "false"
+
+      # Required by older Create React App/Webpack versions
+      # when the project runs on newer Node.js versions.
+      NODE_OPTIONS: --openssl-legacy-provider
+
+    steps:
+      # ----------------------------------------------------------
+      # 1. Download the merged repository commit
+      # ----------------------------------------------------------
+
+      - name: Check out repository
+        uses: actions/checkout@v7
+
+      # ----------------------------------------------------------
+      # 2. Verify required GitHub environment variables
+      # ----------------------------------------------------------
+
+      - name: Validate deployment configuration
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          if [[ -z "${AWS_REGION}" ]]; then
+            echo "ERROR: AWS_REGION is not configured."
+            exit 1
+          fi
+
+          if [[ -z "${AWS_ROLE_ARN}" ]]; then
+            echo "ERROR: AWS_ROLE_ARN is not configured."
+            exit 1
+          fi
+
+          if [[ -z "${TF_STATE_BUCKET}" ]]; then
+            echo "ERROR: TF_STATE_BUCKET is not configured."
+            exit 1
+          fi
+
+          if [[ ! -d "${APP_DIR}" ]]; then
+            echo "ERROR: Application directory does not exist: ${APP_DIR}"
+            exit 1
+          fi
+
+          if [[ ! -d "${TF_DIR}" ]]; then
+            echo "ERROR: Terraform directory does not exist: ${TF_DIR}"
+            exit 1
+          fi
+
+          if [[ ! -f "${TF_DIR}/environments/${ENVIRONMENT}.tfvars" ]]; then
+            echo "ERROR: Environment tfvars file is missing."
+            echo "Expected: ${TF_DIR}/environments/${ENVIRONMENT}.tfvars"
+            exit 1
+          fi
+
+          echo "Deployment environment: ${ENVIRONMENT}"
+          echo "AWS Region: ${AWS_REGION}"
+          echo "Terraform directory: ${TF_DIR}"
+          echo "Application directory: ${APP_DIR}"
+
+      # ----------------------------------------------------------
+      # 3. Install Node.js
+      # ----------------------------------------------------------
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v7
+        with:
+          node-version-file: codebase/rdicidr-0.1.0/.nvmrc
+
+          # Keep caching disabled until package-lock.json is confirmed
+          # inside codebase/rdicidr-0.1.0.
+          package-manager-cache: false
+
+      - name: Display Node.js versions
+        working-directory: ${{ env.APP_DIR }}
+        run: |
+          node --version
+          npm --version
+
+      # ----------------------------------------------------------
+      # 4. Revalidate and build the merged application
+      # ----------------------------------------------------------
+
+      - name: Install application dependencies
+        working-directory: ${{ env.APP_DIR }}
+        run: npm install
+
+      - name: Run ESLint
+        working-directory: ${{ env.APP_DIR }}
+        run: npm run lint
+
+      - name: Run Jest tests
+        working-directory: ${{ env.APP_DIR }}
+        env:
+          CI: "true"
+        run: npm run test
+
+      - name: Build production application
+        working-directory: ${{ env.APP_DIR }}
+        run: npm run build
+
+      - name: Verify production build
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          if [[ ! -f "${APP_DIR}/build/index.html" ]]; then
+            echo "ERROR: React build did not create build/index.html."
+            exit 1
+          fi
+
+          echo "Production build created successfully."
+
+      # ----------------------------------------------------------
+      # 5. Authenticate to AWS through GitHub OIDC
+      # ----------------------------------------------------------
+
+      - name: Authenticate to AWS using OIDC
+        uses: aws-actions/configure-aws-credentials@v6
+        with:
+          role-to-assume: ${{ env.AWS_ROLE_ARN }}
+          aws-region: ${{ env.AWS_REGION }}
+          role-session-name: github-${{ github.ref_name }}-${{ github.run_id }}
+
+      - name: Verify assumed AWS identity
+        run: |
+          aws sts get-caller-identity
+
+      # ----------------------------------------------------------
+      # 6. Install Terraform
+      # ----------------------------------------------------------
+
+      - name: Set up Terraform
+        uses: hashicorp/setup-terraform@v4
+        with:
+          terraform_version: "1.15.8"
+
+          # Disable the Terraform wrapper because later shell commands
+          # read Terraform outputs directly.
+          terraform_wrapper: false
+
+      - name: Display Terraform version
+        run: terraform version
+
+      # ----------------------------------------------------------
+      # 7. Validate Terraform code
+      # ----------------------------------------------------------
+
+      - name: Check Terraform formatting
+        run: |
+          terraform -chdir="${TF_DIR}" fmt -check -recursive
+
+      # ----------------------------------------------------------
+      # 8. Connect Terraform to the remote S3 backend
+      # ----------------------------------------------------------
+
+      - name: Initialize Terraform backend
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          # Both environments use the same manually created bucket,
+          # but each environment has a completely separate state key.
+          #
+          # devel:
+          # rdicidr/devel/terraform.tfstate
+          #
+          # stage:
+          # rdicidr/stage/terraform.tfstate
+          terraform -chdir="${TF_DIR}" init \
+            -input=false \
+            -reconfigure \
+            -backend-config="bucket=${TF_STATE_BUCKET}" \
+            -backend-config="key=rdicidr/${ENVIRONMENT}/terraform.tfstate" \
+            -backend-config="region=${AWS_REGION}" \
+            -backend-config="encrypt=true" \
+            -backend-config="use_lockfile=true"
+
+      - name: Validate Terraform configuration
+        run: |
+          terraform -chdir="${TF_DIR}" validate
+
+      # ----------------------------------------------------------
+      # 9. Generate and review the Terraform plan in the logs
+      # ----------------------------------------------------------
+
+      - name: Create Terraform plan
+        run: |
+          terraform -chdir="${TF_DIR}" plan \
+            -input=false \
+            -var-file="environments/${ENVIRONMENT}.tfvars" \
+            -out=tfplan
+
+      # ----------------------------------------------------------
+      # 10. Create or update AWS infrastructure
+      # ----------------------------------------------------------
+
+      - name: Apply Terraform plan
+        run: |
+          # Apply exactly the saved plan generated in the previous step.
+          terraform -chdir="${TF_DIR}" apply \
+            -input=false \
+            -auto-approve \
+            tfplan
+
+      # ----------------------------------------------------------
+      # 11. Read infrastructure information from Terraform
+      # ----------------------------------------------------------
+
+      - name: Read Terraform outputs
+        id: infrastructure
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          APP_BUCKET="$(
+            terraform -chdir="${TF_DIR}" \
+              output -raw application_bucket_name
+          )"
+
+          LOG_BUCKET="$(
+            terraform -chdir="${TF_DIR}" \
+              output -raw logging_bucket_name
+          )"
+
+          DISTRIBUTION_ID="$(
+            terraform -chdir="${TF_DIR}" \
+              output -raw cloudfront_distribution_id
+          )"
+
+          DOMAIN_NAME="$(
+            terraform -chdir="${TF_DIR}" \
+              output -raw cloudfront_domain_name
+          )"
+
+          if [[ -z "${APP_BUCKET}" ]]; then
+            echo "ERROR: Terraform returned an empty application bucket."
+            exit 1
+          fi
+
+          if [[ -z "${DISTRIBUTION_ID}" ]]; then
+            echo "ERROR: Terraform returned an empty CloudFront distribution ID."
+            exit 1
+          fi
+
+          if [[ -z "${DOMAIN_NAME}" ]]; then
+            echo "ERROR: Terraform returned an empty CloudFront domain."
+            exit 1
+          fi
+
+          echo "app_bucket=${APP_BUCKET}" >> "${GITHUB_OUTPUT}"
+          echo "log_bucket=${LOG_BUCKET}" >> "${GITHUB_OUTPUT}"
+          echo "distribution_id=${DISTRIBUTION_ID}" >> "${GITHUB_OUTPUT}"
+          echo "domain_name=${DOMAIN_NAME}" >> "${GITHUB_OUTPUT}"
+
+          echo "Application bucket: ${APP_BUCKET}"
+          echo "Logging bucket: ${LOG_BUCKET}"
+          echo "CloudFront distribution: ${DISTRIBUTION_ID}"
+          echo "CloudFront domain: ${DOMAIN_NAME}"
+
+      # ----------------------------------------------------------
+      # 12. Upload the compiled React application
+      # ----------------------------------------------------------
+
+      - name: Upload application to S3
+        run: |
+          aws s3 sync \
+            "${APP_DIR}/build/" \
+            "s3://${{ steps.infrastructure.outputs.app_bucket }}/" \
+            --delete
+
+      # ----------------------------------------------------------
+      # 13. Wait until CloudFront is fully deployed
+      # ----------------------------------------------------------
+
+      - name: Wait for CloudFront distribution
+        run: |
+          aws cloudfront wait distribution-deployed \
+            --id "${{ steps.infrastructure.outputs.distribution_id }}"
+
+      # ----------------------------------------------------------
+      # 14. Clear old files from the CloudFront edge cache
+      # ----------------------------------------------------------
+
+      - name: Invalidate CloudFront cache
+        id: invalidation
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          INVALIDATION_ID="$(
+            aws cloudfront create-invalidation \
+              --distribution-id "${{ steps.infrastructure.outputs.distribution_id }}" \
+              --paths "/*" \
+              --query "Invalidation.Id" \
+              --output text
+          )"
+
+          echo "invalidation_id=${INVALIDATION_ID}" >> "${GITHUB_OUTPUT}"
+          echo "Created invalidation: ${INVALIDATION_ID}"
+
+      - name: Wait for CloudFront invalidation
+        run: |
+          aws cloudfront wait invalidation-completed \
+            --distribution-id "${{ steps.infrastructure.outputs.distribution_id }}" \
+            --id "${{ steps.invalidation.outputs.invalidation_id }}"
+
+      # ----------------------------------------------------------
+      # 15. Verify the public application
+      # ----------------------------------------------------------
+
+      - name: Verify deployed application
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          URL="https://${{ steps.infrastructure.outputs.domain_name }}"
+
+          echo "Testing: ${URL}"
+
+          curl \
+            --fail \
+            --location \
+            --retry 12 \
+            --retry-delay 10 \
+            --retry-all-errors \
+            "${URL}" \
+            > /dev/null
+
+          echo "Application is responding successfully."
+
+      # ----------------------------------------------------------
+      # 16. Create a readable GitHub Actions summary
+      # ----------------------------------------------------------
+
+      - name: Write deployment summary
+        shell: bash
+        run: |
+          {
+            echo "## AWS deployment completed"
+            echo
+            echo "| Item | Value |"
+            echo "|---|---|"
+            echo "| Environment | \`${ENVIRONMENT}\` |"
+            echo "| Branch | \`${GITHUB_REF_NAME}\` |"
+            echo "| AWS Region | \`${AWS_REGION}\` |"
+            echo "| Application bucket | \`${{ steps.infrastructure.outputs.app_bucket }}\` |"
+            echo "| Logging bucket | \`${{ steps.infrastructure.outputs.log_bucket }}\` |"
+            echo "| CloudFront distribution | \`${{ steps.infrastructure.outputs.distribution_id }}\` |"
+            echo "| Application URL | https://${{ steps.infrastructure.outputs.domain_name }} |"
+          } >> "${GITHUB_STEP_SUMMARY}"
