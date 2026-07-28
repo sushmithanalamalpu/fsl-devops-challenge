@@ -1,7 +1,5 @@
 name: Pull Request CI
 
-# Run when a PR targeting devel or stage is opened,
-# updated, reopened, or changed from draft to ready.
 on:
   pull_request:
     branches:
