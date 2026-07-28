@@ -44,6 +44,11 @@ jobs:
     needs: validate-branch-flow
     runs-on: ubuntu-latest
 
+    # Run all npm commands from the actual application directory.
+    defaults:
+      run:
+        working-directory: codebase/rdicidr-0.1.0
+
     steps:
       - name: Check out repository
         uses: actions/checkout@v7
@@ -54,10 +59,12 @@ jobs:
           node-version: "15.5.1"
           package-manager-cache: false
 
-      - name: Display runtime versions
+      - name: Display runtime versions and available scripts
         run: |
           node --version
           npm --version
+          pwd
+          npm run
 
       - name: Install dependencies
         run: npm install
@@ -72,9 +79,3 @@ jobs:
 
       - name: Build production application
         run: npm run build
-
-      # Enable this only after all existing files
-      # have been formatted successfully.
-      #
-      # - name: Validate Prettier formatting
-      #   run: npm run prettier
