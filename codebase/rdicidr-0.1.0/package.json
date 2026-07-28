@@ -6,8 +6,6 @@
     "@testing-library/jest-dom": "^5.11.9",
     "@testing-library/react": "^11.2.5",
     "@testing-library/user-event": "^12.8.3",
-    "node-sass": "1.32.13",
-    "prettier": "3.3.1",
     "react": "^17.0.1",
     "react-dom": "^17.0.1",
     "react-scripts": "4.0.3",
@@ -19,7 +17,6 @@
     "test": "react-scripts test",
     "eject": "react-scripts eject",
     "lint": "eslint src --ext .js,.jsx",
-    "prettier": "prettier -c ./src/"
   },
   "eslintConfig": {
     "extends": [
