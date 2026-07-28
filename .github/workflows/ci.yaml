@@ -56,12 +56,20 @@ jobs:
     steps:
       - name: Check out repository
         uses: actions/checkout@v7
-
+      - name: Verify dependency lock file
+        run: |
+          if [[ ! -f package-lock.json ]]; then
+            echo "ERROR: package-lock.json is missing from codebase/rdicidr-0.1.0."
+            echo "Commit the lock file so CI installs the tested dependency versions."
+            exit 1
+          fi
       - name: Set up Node.js
         uses: actions/setup-node@v7
         with:
           node-version-file: codebase/rdicidr-0.1.0/.nvmrc
-          package-manager-cache: false
+          cache: npm
+          cache-dependency-path: codebase/rdicidr-0.1.0/package-lock.json
+
 
       - name: Display runtime versions
         run: |
