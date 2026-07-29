@@ -14,7 +14,7 @@ locals {
   cloudfront_origin_id = "${local.name_prefix}-s3-origin"
 
   # Canonical user ID used by CloudFront legacy access-log delivery.
-  cloudfront_log_delivery_canonical_user_id = "c4c1ede66af53448b93c2833819fc7f531e37cccf538335d6c4a53d1df24f534"
+  cloudfront_log_delivery_canonical_user_id = "c4c1ede66af53448b93c283ce9448c4ba468c9432aa01d700d3878632f77d2d0"
 }
 
 # -------------------------------------------------------------------
