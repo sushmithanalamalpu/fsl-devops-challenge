@@ -57,7 +57,7 @@ jobs:
       ENVIRONMENT: ${{ github.ref_name }}
 
       # Values loaded from the selected GitHub environment.
-      AWS_REGION: ${{ vars.aws_region }}
+      AWS_REGION: us-east-1
       AWS_ROLE_ARN: ${{ vars.AWS_ROLE_ARN }}
       TF_STATE_BUCKET: ${{ vars.TF_STATE_BUCKET }}
 
@@ -86,18 +86,26 @@ jobs:
         run: |
           set -euo pipefail
 
-          if [[ -z "${AWS_REGION}" ]]; then
-            echo "ERROR: AWS_REGION is not configured."
+          echo "Branch: ${GITHUB_REF_NAME}"
+          echo "Environment: ${ENVIRONMENT}"
+          echo "AWS Region: ${AWS_REGION}"
+
+          if [[ "${ENVIRONMENT}" != "devel" && "${ENVIRONMENT}" != "stage" ]]; then
+            echo "ERROR: Only devel and stage branches can be deployed."
             exit 1
           fi
 
           if [[ -z "${AWS_ROLE_ARN}" ]]; then
-            echo "ERROR: AWS_ROLE_ARN is not configured."
+            echo "ERROR: AWS_ROLE_ARN is missing."
+            echo "Create it under:"
+            echo "Settings -> Secrets and variables -> Actions -> Variables"
             exit 1
           fi
 
           if [[ -z "${TF_STATE_BUCKET}" ]]; then
-            echo "ERROR: TF_STATE_BUCKET is not configured."
+            echo "ERROR: TF_STATE_BUCKET is missing."
+            echo "Create it under:"
+            echo "Settings -> Secrets and variables -> Actions -> Variables"
             exit 1
           fi
 
@@ -111,16 +119,17 @@ jobs:
             exit 1
           fi
 
-          if [[ ! -f "${TF_DIR}/environments/${ENVIRONMENT}.tfvars" ]]; then
+          TFVARS_FILE="${TF_DIR}/environments/${ENVIRONMENT}.tfvars"
+
+          if [[ ! -f "${TFVARS_FILE}" ]]; then
             echo "ERROR: Environment tfvars file is missing."
-            echo "Expected: ${TF_DIR}/environments/${ENVIRONMENT}.tfvars"
+            echo "Expected: ${TFVARS_FILE}"
             exit 1
           fi
 
-          echo "Deployment environment: ${ENVIRONMENT}"
-          echo "AWS Region: ${AWS_REGION}"
-          echo "Terraform directory: ${TF_DIR}"
-          echo "Application directory: ${APP_DIR}"
+          echo "AWS role configuration found."
+          echo "Terraform state bucket configuration found."
+          echo "Deployment configuration is valid."
 
       # ----------------------------------------------------------
       # 3. Install Node.js
